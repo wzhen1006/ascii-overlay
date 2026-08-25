@@ -46,6 +46,11 @@ const DEFAULT_ASCII_CONFIG = {
     project: true,
     projectIterations: 10,
   },
+  safeArea: {
+    enabled: true,
+    fadeSize: 60,
+    paddingPx: 0,
+  },
 };
 
 const ASCII_CONFIG = structuredClone(DEFAULT_ASCII_CONFIG);
@@ -57,6 +62,21 @@ const controlPanel = document.querySelector("#control-panel");
 const controlsForm = document.querySelector("#controls-form");
 const context = canvas.getContext("2d", { alpha: true });
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const SAFE_AREA_TARGET_SELECTOR = [
+  "[data-ascii-safe-area]",
+  "[data-ascii-overlay-content] h1",
+  "[data-ascii-overlay-content] h2",
+  "[data-ascii-overlay-content] h3",
+  "[data-ascii-overlay-content] h4",
+  "[data-ascii-overlay-content] h5",
+  "[data-ascii-overlay-content] h6",
+  "[data-ascii-overlay-content] p",
+  "[data-ascii-overlay-content] li",
+  "[data-ascii-overlay-content] blockquote",
+  "[data-ascii-overlay-content] button",
+  "[data-ascii-overlay-content] [role='button']",
+  "[data-ascii-overlay-content] img",
+].join(",");
 
 const atlasCanvas = document.createElement("canvas");
 const atlasContext = atlasCanvas.getContext("2d");
@@ -77,6 +97,9 @@ const runtime = {
   pointerStart: null,
   pointerLast: null,
   pointerDragging: false,
+  safeAreaRects: [],
+  safeAreaDirty: true,
+  safeAreaTargets: new Set(),
 };
 
 function clamp(value, minimum, maximum) {
@@ -666,6 +689,78 @@ function mapLumaToGlyph(luma) {
   );
 }
 
+function markSafeAreaDirty() {
+  runtime.safeAreaDirty = true;
+}
+
+const safeAreaResizeObserver = new ResizeObserver(markSafeAreaDirty);
+
+function syncSafeAreaTargets() {
+  runtime.safeAreaDirty = false;
+  const targets = ASCII_CONFIG.safeArea.enabled
+    ? new Set(Array.from(document.querySelectorAll(SAFE_AREA_TARGET_SELECTOR)).filter(
+      (target) => target instanceof HTMLElement && !target.closest("[data-controls-ui]"),
+    ))
+    : new Set();
+  for (const target of runtime.safeAreaTargets) {
+    if (!targets.has(target)) safeAreaResizeObserver.unobserve(target);
+  }
+  for (const target of targets) {
+    if (!runtime.safeAreaTargets.has(target)) safeAreaResizeObserver.observe(target);
+  }
+  runtime.safeAreaTargets = targets;
+}
+
+function isSafeAreaTargetVisible(target) {
+  for (let element = target; element instanceof HTMLElement; element = element.parentElement) {
+    const styles = getComputedStyle(element);
+    if (
+      styles.display === "none"
+      || styles.visibility === "hidden"
+      || styles.visibility === "collapse"
+      || styles.contentVisibility === "hidden"
+      || Number.parseFloat(styles.opacity) <= 0
+    ) return false;
+  }
+  return true;
+}
+
+function collectSafeAreaRects() {
+  if (runtime.safeAreaDirty) syncSafeAreaTargets();
+  runtime.safeAreaRects = [];
+  if (!ASCII_CONFIG.safeArea.enabled) return;
+
+  const containerBounds = container.getBoundingClientRect();
+  if (!containerBounds.width || !containerBounds.height) return;
+  const padding = Math.max(0, ASCII_CONFIG.safeArea.paddingPx);
+
+  for (const target of runtime.safeAreaTargets) {
+    if (!isSafeAreaTargetVisible(target)) continue;
+
+    const bounds = target.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) continue;
+    const left = Math.max(0, bounds.left - containerBounds.left - padding);
+    const top = Math.max(0, bounds.top - containerBounds.top - padding);
+    const right = Math.min(containerBounds.width, bounds.right - containerBounds.left + padding);
+    const bottom = Math.min(containerBounds.height, bounds.bottom - containerBounds.top + padding);
+    if (right <= left || bottom <= top) continue;
+    runtime.safeAreaRects.push({ left, top, right, bottom });
+  }
+}
+
+function getSafeAreaAlpha(x, y, rects, fadeSize) {
+  if (!rects.length) return 1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const rect of rects) {
+    const distanceX = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0;
+    const distanceY = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0;
+    const distance = Math.hypot(distanceX, distanceY);
+    if (distance === 0) return 0;
+    nearestDistance = Math.min(nearestDistance, distance);
+  }
+  return fadeSize <= 0 ? 1 : clamp01(nearestDistance / fadeSize);
+}
+
 function render() {
   const layout = runtime.layout;
   if (!layout?.cols || !layout.rows) return;
@@ -678,6 +773,11 @@ function render() {
     return;
   }
 
+  if (ASCII_CONFIG.safeArea.enabled || runtime.safeAreaDirty) collectSafeAreaRects();
+  const safeAreaRects = ASCII_CONFIG.safeArea.enabled ? runtime.safeAreaRects : [];
+  const safeAreaFadeSize = Math.max(0, ASCII_CONFIG.safeArea.fadeSize);
+  let currentAlpha = 1;
+
   for (let row = 0; row < layout.rows; row += 1) {
     const rowOffset = row * layout.cols;
     for (let column = 0; column < layout.cols; column += 1) {
@@ -689,6 +789,17 @@ function render() {
         : luma * density + (1 - density);
       const glyphIndex = mapLumaToGlyph(luma);
       if (glyphIndex === layout.spaceIndex && layout.spaceIndex >= 0) continue;
+      const safeAreaAlpha = getSafeAreaAlpha(
+        layout.offsetX + column * layout.cellWidth + layout.cellWidth / 2,
+        layout.offsetY + row * layout.cellHeight + layout.cellHeight / 2,
+        safeAreaRects,
+        safeAreaFadeSize,
+      );
+      if (safeAreaAlpha <= 0) continue;
+      if (safeAreaAlpha !== currentAlpha) {
+        context.globalAlpha = safeAreaAlpha;
+        currentAlpha = safeAreaAlpha;
+      }
       context.drawImage(
         atlasCanvas,
         glyphIndex * layout.tileWidth,
@@ -702,6 +813,7 @@ function render() {
       );
     }
   }
+  context.globalAlpha = 1;
   canvas.dataset.asciiOverlayState = "running";
 }
 
@@ -792,6 +904,32 @@ const CONTROL_GROUPS = [
     ],
   },
   {
+    title: "内容避让",
+    description: "让字符避开叠加在画布上的正文、按钮和图片。",
+    open: true,
+    controls: [
+      { path: "safeArea.enabled", label: "启用内容避让", type: "toggle", effect: "safeArea" },
+      {
+        path: "safeArea.fadeSize",
+        label: "渐隐距离",
+        min: 0,
+        max: 160,
+        step: 4,
+        unit: "px",
+        effect: "safeArea",
+      },
+      {
+        path: "safeArea.paddingPx",
+        label: "内容外扩",
+        min: 0,
+        max: 64,
+        step: 2,
+        unit: "px",
+        effect: "safeArea",
+      },
+    ],
+  },
+  {
     title: "Hover 与拖拽",
     description: "控制鼠标经过时的揭示范围、推力和拖尾。",
     open: true,
@@ -857,17 +995,175 @@ function clearFluid() {
   render();
 }
 
-function hexToRgba(hex, opacity) {
+function parseHexColor(hex) {
   const normalized = hex.replace("#", "").trim();
   const expanded = normalized.length === 3
     ? normalized.split("").map((character) => character.repeat(2)).join("")
     : normalized;
+  if (!/^[\da-f]{6}$/i.test(expanded)) return null;
   const color = Number.parseInt(expanded, 16);
-  if (!Number.isFinite(color) || expanded.length !== 6) return "transparent";
-  const red = (color >> 16) & 255;
-  const green = (color >> 8) & 255;
-  const blue = color & 255;
-  return `rgba(${red}, ${green}, ${blue}, ${clamp01(opacity)})`;
+  return {
+    red: (color >> 16) & 255,
+    green: (color >> 8) & 255,
+    blue: color & 255,
+  };
+}
+
+function hexToRgba(hex, opacity) {
+  const color = parseHexColor(hex);
+  if (!color) return "transparent";
+  return `rgba(${color.red}, ${color.green}, ${color.blue}, ${clamp01(opacity)})`;
+}
+
+function decontaminateTransparentPixels(imageData, fallbackHex) {
+  const color = parseHexColor(fallbackHex);
+  if (!color) return false;
+  const pixels = imageData.data;
+  let changed = false;
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (pixels[index + 3] !== 0) continue;
+    changed = true;
+    pixels[index] = color.red;
+    pixels[index + 1] = color.green;
+    pixels[index + 2] = color.blue;
+  }
+  return changed;
+}
+
+function addTransparentEdgeGuard(imageData, fallbackHex, radius = 2) {
+  const color = parseHexColor(fallbackHex);
+  if (!color) return;
+  const { width, height, data } = imageData;
+  const pixelCount = width * height;
+  const alpha = new Uint8Array(pixelCount);
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    alpha[pixel] = data[pixel * 4 + 3];
+  }
+
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    if (alpha[pixel] === 0) continue;
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    const minimumX = Math.max(0, x - radius);
+    const maximumX = Math.min(width - 1, x + radius);
+    const minimumY = Math.max(0, y - radius);
+    const maximumY = Math.min(height - 1, y + radius);
+    for (let targetY = minimumY; targetY <= maximumY; targetY += 1) {
+      for (let targetX = minimumX; targetX <= maximumX; targetX += 1) {
+        const targetPixel = targetY * width + targetX;
+        if (alpha[targetPixel] !== 0) continue;
+        const targetIndex = targetPixel * 4;
+        data[targetIndex] = color.red;
+        data[targetIndex + 1] = color.green;
+        data[targetIndex + 2] = color.blue;
+        data[targetIndex + 3] = 1;
+      }
+    }
+  }
+}
+
+function createCrcTable() {
+  return Uint32Array.from({ length: 256 }, (_, value) => {
+    let crc = value;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 1) ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+    return crc >>> 0;
+  });
+}
+
+const PNG_CRC_TABLE = createCrcTable();
+
+function calculateCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = PNG_CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createPngChunk(type, data = new Uint8Array()) {
+  const typeBytes = new TextEncoder().encode(type);
+  const chunk = new Uint8Array(12 + data.length);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, data.length);
+  chunk.set(typeBytes, 4);
+  chunk.set(data, 8);
+  view.setUint32(8 + data.length, calculateCrc32(chunk.subarray(4, 8 + data.length)));
+  return chunk;
+}
+
+async function encodePng(imageData) {
+  const { width, height, data } = imageData;
+  const rowLength = width * 4;
+  const compression = new CompressionStream("deflate");
+  const writer = compression.writable.getWriter();
+  const compressedPromise = new Response(compression.readable).arrayBuffer();
+  const rowsPerChunk = Math.max(1, Math.floor((1024 * 1024) / (rowLength + 1)));
+
+  for (let startRow = 0; startRow < height; startRow += rowsPerChunk) {
+    const rowCount = Math.min(rowsPerChunk, height - startRow);
+    const block = new Uint8Array((rowLength + 1) * rowCount);
+    for (let row = 0; row < rowCount; row += 1) {
+      const sourceStart = (startRow + row) * rowLength;
+      const targetStart = row * (rowLength + 1);
+      block[targetStart] = 0;
+      block.set(data.subarray(sourceStart, sourceStart + rowLength), targetStart + 1);
+    }
+    await writer.write(block);
+  }
+  await writer.close();
+
+  const header = new Uint8Array(13);
+  const headerView = new DataView(header.buffer);
+  headerView.setUint32(0, width);
+  headerView.setUint32(4, height);
+  header[8] = 8;
+  header[9] = 6;
+
+  const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const compressed = new Uint8Array(await compressedPromise);
+  return new Blob([
+    signature,
+    createPngChunk("IHDR", header),
+    createPngChunk("IDAT", compressed),
+    createPngChunk("IEND"),
+  ], { type: "image/png" });
+}
+
+function canvasToPngBlob(canvasElement) {
+  return new Promise((resolve, reject) => {
+    canvasElement.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("The browser could not encode the canvas as PNG."));
+    }, "image/png");
+  });
+}
+
+async function createCaptureBlob(canvasElement, captureContext) {
+  const imageData = captureContext.getImageData(
+    0,
+    0,
+    canvasElement.width,
+    canvasElement.height,
+  );
+  const hasTransparentPixels = decontaminateTransparentPixels(
+    imageData,
+    ASCII_CONFIG.glyphColor,
+  );
+  if (!hasTransparentPixels) return canvasToPngBlob(canvasElement);
+
+  if ("CompressionStream" in window) {
+    try {
+      return await encodePng(imageData);
+    } catch (error) {
+      console.warn("Falling back to compatible PNG edge protection", error);
+    }
+  }
+
+  addTransparentEdgeGuard(imageData, ASCII_CONFIG.glyphColor);
+  captureContext.putImageData(imageData, 0, 0);
+  return canvasToPngBlob(canvasElement);
 }
 
 function applyVisualConfig() {
@@ -895,6 +1191,11 @@ function applyControlEffect(effect) {
   }
   if (effect === "fluid") {
     clearFluid();
+    return;
+  }
+  if (effect === "safeArea") {
+    markSafeAreaDirty();
+    render();
   }
 }
 
@@ -1134,6 +1435,7 @@ document.querySelector("#clear-field").addEventListener("click", clearFluid);
 document.querySelector("#reset-controls").addEventListener("click", () => {
   Object.assign(ASCII_CONFIG, structuredClone(DEFAULT_ASCII_CONFIG));
   applyVisualConfig();
+  markSafeAreaDirty();
   runtime.layout = null;
   resize();
   clearFluid();
@@ -1149,35 +1451,33 @@ document.querySelector("#copy-config").addEventListener("click", async (event) =
   }
   window.setTimeout(() => { button.textContent = "复制 JSON"; }, 1200);
 });
-document.querySelector("#capture-png").addEventListener("click", (event) => {
+document.querySelector("#capture-png").addEventListener("click", async (event) => {
   const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "处理中…";
   render();
-  let captureCanvas = canvas;
+  const captureCanvas = document.createElement("canvas");
+  captureCanvas.width = canvas.width;
+  captureCanvas.height = canvas.height;
+  const captureContext = captureCanvas.getContext("2d");
+  if (!captureContext) {
+    button.textContent = "截图失败";
+    button.disabled = false;
+    window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
+    return;
+  }
+
   if (ASCII_CONFIG.includeBackgroundInExport) {
-    captureCanvas = document.createElement("canvas");
-    captureCanvas.width = canvas.width;
-    captureCanvas.height = canvas.height;
-    const captureContext = captureCanvas.getContext("2d");
-    if (!captureContext) {
-      button.textContent = "截图失败";
-      window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
-      return;
-    }
     captureContext.fillStyle = hexToRgba(
       ASCII_CONFIG.background,
       ASCII_CONFIG.backgroundOpacity,
     );
     captureContext.fillRect(0, 0, captureCanvas.width, captureCanvas.height);
-    captureContext.drawImage(canvas, 0, 0);
   }
+  captureContext.drawImage(canvas, 0, 0);
 
-  captureCanvas.toBlob((blob) => {
-    if (!blob) {
-      button.textContent = "截图失败";
-      window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
-      return;
-    }
-
+  try {
+    const blob = await createCaptureBlob(captureCanvas, captureContext);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1185,8 +1485,13 @@ document.querySelector("#capture-png").addEventListener("click", (event) => {
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
     button.textContent = "已下载";
+  } catch (error) {
+    console.error("PNG capture failed", error);
+    button.textContent = "截图失败";
+  } finally {
+    button.disabled = false;
     window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
-  }, "image/png");
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && controlPanel.classList.contains("is-open")) {
@@ -1197,7 +1502,28 @@ document.addEventListener("visibilitychange", () => {
   runtime.lastRenderTime = null;
   runtime.lastTickTime = 0;
 });
-new ResizeObserver(resize).observe(container);
+new ResizeObserver(() => {
+  resize();
+  markSafeAreaDirty();
+}).observe(container);
+new MutationObserver(markSafeAreaDirty).observe(document.body, {
+  subtree: true,
+  childList: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: [
+    "class",
+    "style",
+    "src",
+    "hidden",
+    "data-ascii-safe-area",
+    "data-ascii-overlay-content",
+  ],
+});
+window.addEventListener("scroll", markSafeAreaDirty, { passive: true, capture: true });
+window.addEventListener("resize", markSafeAreaDirty, { passive: true });
+document.addEventListener("load", markSafeAreaDirty, { capture: true });
+document.fonts?.addEventListener?.("loadingdone", markSafeAreaDirty);
 
 reducedMotion.addEventListener?.("change", () => {
   runtime.fluid = null;
