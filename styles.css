@@ -78,7 +78,7 @@ body,
 
 html,
 body {
-  background: var(--bg-ascii-surface);
+  background: transparent;
   overscroll-behavior: none;
 }
 
@@ -398,7 +398,7 @@ summary:focus-visible {
 
 .panel-footer {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-8);
   padding: var(--spacing-12) var(--spacing-16) var(--spacing-16);
   border-top: 1px solid var(--control-border);

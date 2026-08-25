@@ -1,6 +1,9 @@
 const DEFAULT_ASCII_CONFIG = {
   background: "#68c0ff",
+  backgroundOpacity: 1,
+  includeBackgroundInExport: false,
   glyphColor: "#ffffff",
+  glyphOpacity: 1,
   charset: "MINIMAX CODE ",
   fontFamily: "SF Mono, Consolas, Liberation Mono, ui-monospace, monospace",
   fontSize: 9,
@@ -742,7 +745,30 @@ const CONTROL_GROUPS = [
     open: true,
     controls: [
       { path: "background", label: "背景颜色", type: "color", effect: "background" },
+      {
+        path: "backgroundOpacity",
+        label: "背景不透明度",
+        min: 0,
+        max: 1,
+        step: 0.01,
+        percent: true,
+        effect: "background",
+      },
+      {
+        path: "includeBackgroundInExport",
+        label: "导出包含背景",
+        type: "toggle",
+      },
       { path: "glyphColor", label: "字符颜色", type: "color", effect: "glyph" },
+      {
+        path: "glyphOpacity",
+        label: "字符不透明度",
+        min: 0,
+        max: 1,
+        step: 0.01,
+        percent: true,
+        effect: "glyph",
+      },
       { path: "charset", label: "字符阶梯", type: "text", effect: "layout" },
       { path: "fontSize", label: "字号", min: 5, max: 18, step: 1, unit: "px", effect: "layout" },
       { path: "cellPadding.x", label: "水平间距", min: 0, max: 6, step: 0.5, unit: "px", effect: "layout" },
@@ -831,9 +857,24 @@ function clearFluid() {
   render();
 }
 
+function hexToRgba(hex, opacity) {
+  const normalized = hex.replace("#", "").trim();
+  const expanded = normalized.length === 3
+    ? normalized.split("").map((character) => character.repeat(2)).join("")
+    : normalized;
+  const color = Number.parseInt(expanded, 16);
+  if (!Number.isFinite(color) || expanded.length !== 6) return "transparent";
+  const red = (color >> 16) & 255;
+  const green = (color >> 8) & 255;
+  const blue = color & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${clamp01(opacity)})`;
+}
+
 function applyVisualConfig() {
-  document.documentElement.style.setProperty("--bg-ascii-surface", ASCII_CONFIG.background);
-  document.documentElement.style.setProperty("--text-ascii-glyph", ASCII_CONFIG.glyphColor);
+  const background = hexToRgba(ASCII_CONFIG.background, ASCII_CONFIG.backgroundOpacity);
+  const glyph = hexToRgba(ASCII_CONFIG.glyphColor, ASCII_CONFIG.glyphOpacity);
+  document.documentElement.style.setProperty("--bg-ascii-surface", background);
+  document.documentElement.style.setProperty("--text-ascii-glyph", glyph);
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", ASCII_CONFIG.background);
 }
 
@@ -860,6 +901,7 @@ function applyControlEffect(effect) {
 function formatControlValue(value, definition) {
   if (definition.type === "toggle") return value ? "开" : "关";
   if (definition.type === "color" || definition.type === "text") return String(value);
+  if (definition.percent) return `${Math.round(Number(value) * 100)}%`;
   const decimals = String(definition.step ?? 1).split(".")[1]?.length ?? 0;
   return `${Number(value).toFixed(decimals)}${definition.unit ? ` ${definition.unit}` : ""}`;
 }
@@ -1106,6 +1148,45 @@ document.querySelector("#copy-config").addEventListener("click", async (event) =
     button.textContent = "复制失败";
   }
   window.setTimeout(() => { button.textContent = "复制 JSON"; }, 1200);
+});
+document.querySelector("#capture-png").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  render();
+  let captureCanvas = canvas;
+  if (ASCII_CONFIG.includeBackgroundInExport) {
+    captureCanvas = document.createElement("canvas");
+    captureCanvas.width = canvas.width;
+    captureCanvas.height = canvas.height;
+    const captureContext = captureCanvas.getContext("2d");
+    if (!captureContext) {
+      button.textContent = "截图失败";
+      window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
+      return;
+    }
+    captureContext.fillStyle = hexToRgba(
+      ASCII_CONFIG.background,
+      ASCII_CONFIG.backgroundOpacity,
+    );
+    captureContext.fillRect(0, 0, captureCanvas.width, captureCanvas.height);
+    captureContext.drawImage(canvas, 0, 0);
+  }
+
+  captureCanvas.toBlob((blob) => {
+    if (!blob) {
+      button.textContent = "截图失败";
+      window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
+      return;
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `minimax-code-ascii-${Date.now()}.png`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    button.textContent = "已下载";
+    window.setTimeout(() => { button.textContent = "截图 PNG"; }, 1200);
+  }, "image/png");
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && controlPanel.classList.contains("is-open")) {
