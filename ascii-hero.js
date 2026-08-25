@@ -60,8 +60,15 @@ const canvas = document.querySelector("#ascii-canvas");
 const container = document.querySelector("#ascii-field");
 const controlPanel = document.querySelector("#control-panel");
 const controlsForm = document.querySelector("#controls-form");
+const safeAreaPreviewText = document.querySelector("#safe-area-preview-text");
+const safeAreaPreviewButton = document.querySelector("#safe-area-preview-button");
+const safeAreaPreviewImage = document.querySelector("#safe-area-preview-image");
 const context = canvas.getContext("2d", { alpha: true });
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const DEFAULT_SAFE_AREA_PREVIEW = Object.freeze({
+  text: "正文会避开 ASCII 字符",
+  buttonLabel: "预览按钮",
+});
 const SAFE_AREA_TARGET_SELECTOR = [
   "[data-ascii-safe-area]",
   "[data-ascii-overlay-content] h1",
@@ -984,6 +991,68 @@ function setConfigValue(path, value) {
   target[lastKey] = value;
 }
 
+let safeAreaPreviewImageUrl = null;
+let safeAreaPreviewImageName = "";
+
+function setSafeAreaPreviewText(value) {
+  const text = value.trim();
+  safeAreaPreviewText.textContent = text;
+  safeAreaPreviewText.hidden = !text;
+  markSafeAreaDirty();
+}
+
+function setSafeAreaPreviewButtonLabel(value) {
+  const label = value.trim();
+  safeAreaPreviewButton.textContent = label;
+  safeAreaPreviewButton.hidden = !label;
+  markSafeAreaDirty();
+}
+
+function syncSafeAreaPreviewImageControls(message = "") {
+  const input = document.querySelector("#control-safe-area-preview-image");
+  const status = document.querySelector("#control-safe-area-preview-image-status");
+  const clearButton = document.querySelector("#clear-safe-area-preview-image");
+  if (status) {
+    status.textContent = message
+      || safeAreaPreviewImageName
+      || "支持 PNG、JPEG、WebP、GIF 和 SVG。";
+  }
+  if (clearButton) clearButton.disabled = !safeAreaPreviewImageUrl;
+  if (input && !safeAreaPreviewImageUrl) input.value = "";
+}
+
+function clearSafeAreaPreviewImage(message = "") {
+  safeAreaPreviewImage.hidden = true;
+  safeAreaPreviewImage.removeAttribute("src");
+  safeAreaPreviewImage.alt = "上传的内容避让预览图片";
+  if (safeAreaPreviewImageUrl) URL.revokeObjectURL(safeAreaPreviewImageUrl);
+  safeAreaPreviewImageUrl = null;
+  safeAreaPreviewImageName = "";
+  syncSafeAreaPreviewImageControls(message);
+  markSafeAreaDirty();
+}
+
+function setSafeAreaPreviewImage(file) {
+  if (!file?.type.startsWith("image/")) {
+    syncSafeAreaPreviewImageControls("请选择有效的图片文件。");
+    return;
+  }
+  if (safeAreaPreviewImageUrl) URL.revokeObjectURL(safeAreaPreviewImageUrl);
+  safeAreaPreviewImageUrl = URL.createObjectURL(file);
+  safeAreaPreviewImageName = file.name;
+  safeAreaPreviewImage.alt = `内容避让预览：${file.name}`;
+  safeAreaPreviewImage.hidden = false;
+  safeAreaPreviewImage.src = safeAreaPreviewImageUrl;
+  syncSafeAreaPreviewImageControls();
+  markSafeAreaDirty();
+}
+
+function resetSafeAreaPreview() {
+  setSafeAreaPreviewText(DEFAULT_SAFE_AREA_PREVIEW.text);
+  setSafeAreaPreviewButtonLabel(DEFAULT_SAFE_AREA_PREVIEW.buttonLabel);
+  clearSafeAreaPreviewImage();
+}
+
 function clearFluid() {
   runtime.fluid = null;
   runtime.splashes.length = 0;
@@ -1288,8 +1357,79 @@ function createControl(definition) {
   return row;
 }
 
+function createSafeAreaPreviewControls() {
+  const section = document.createElement("details");
+  section.className = "control-group";
+  section.open = true;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = "避让预览";
+  summary.append(title);
+
+  const body = document.createElement("div");
+  body.className = "control-group__body";
+  const description = document.createElement("p");
+  description.textContent = "编辑画布上的正文和按钮，或上传图片，直接观察 ASCII 避让效果。";
+
+  const textRow = document.createElement("div");
+  textRow.className = "control-row control-row--text";
+  const textLabel = document.createElement("label");
+  textLabel.htmlFor = "control-safe-area-preview-text";
+  textLabel.textContent = "预览文字";
+  const textInput = document.createElement("input");
+  textInput.id = textLabel.htmlFor;
+  textInput.type = "text";
+  textInput.value = safeAreaPreviewText.hidden ? "" : safeAreaPreviewText.textContent;
+  textInput.placeholder = "清空后隐藏文字";
+  textInput.addEventListener("input", () => setSafeAreaPreviewText(textInput.value));
+  textRow.append(textLabel, textInput);
+
+  const buttonRow = document.createElement("div");
+  buttonRow.className = "control-row control-row--text";
+  const buttonLabel = document.createElement("label");
+  buttonLabel.htmlFor = "control-safe-area-preview-button";
+  buttonLabel.textContent = "按钮文案";
+  const buttonInput = document.createElement("input");
+  buttonInput.id = buttonLabel.htmlFor;
+  buttonInput.type = "text";
+  buttonInput.value = safeAreaPreviewButton.hidden ? "" : safeAreaPreviewButton.textContent;
+  buttonInput.placeholder = "清空后隐藏按钮";
+  buttonInput.addEventListener("input", () => setSafeAreaPreviewButtonLabel(buttonInput.value));
+  buttonRow.append(buttonLabel, buttonInput);
+
+  const fileRow = document.createElement("div");
+  fileRow.className = "control-row control-row--file";
+  const fileLabel = document.createElement("label");
+  fileLabel.htmlFor = "control-safe-area-preview-image";
+  fileLabel.textContent = "预览图片";
+  const fileInput = document.createElement("input");
+  fileInput.id = fileLabel.htmlFor;
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.addEventListener("change", () => {
+    const [file] = fileInput.files || [];
+    if (file) setSafeAreaPreviewImage(file);
+  });
+  const fileStatus = document.createElement("small");
+  fileStatus.id = "control-safe-area-preview-image-status";
+  fileStatus.textContent = safeAreaPreviewImageName || "支持 PNG、JPEG、WebP、GIF 和 SVG。";
+  const clearButton = document.createElement("button");
+  clearButton.id = "clear-safe-area-preview-image";
+  clearButton.className = "control-row__button";
+  clearButton.type = "button";
+  clearButton.textContent = "清除图片";
+  clearButton.disabled = !safeAreaPreviewImageUrl;
+  clearButton.addEventListener("click", () => clearSafeAreaPreviewImage());
+  fileRow.append(fileLabel, fileInput, fileStatus, clearButton);
+
+  body.append(description, textRow, buttonRow, fileRow);
+  section.append(summary, body);
+  return section;
+}
+
 function buildControls() {
   controlsForm.replaceChildren();
+  controlsForm.append(createSafeAreaPreviewControls());
   for (const group of CONTROL_GROUPS) {
     const section = document.createElement("details");
     section.className = "control-group";
@@ -1429,11 +1569,16 @@ window.addEventListener("pointermove", handlePointerMove, { passive: true });
 window.addEventListener("pointerdown", handlePointerDown, { passive: true });
 window.addEventListener("pointerup", handlePointerUp, { passive: true });
 window.addEventListener("pointercancel", handlePointerUp, { passive: true });
+safeAreaPreviewImage.addEventListener("load", markSafeAreaDirty);
+safeAreaPreviewImage.addEventListener("error", () => {
+  clearSafeAreaPreviewImage("图片无法加载，请尝试其他文件。");
+});
 document.querySelector("#controls-toggle").addEventListener("click", () => setPanelOpen(true));
 document.querySelector("#controls-close").addEventListener("click", () => setPanelOpen(false));
 document.querySelector("#clear-field").addEventListener("click", clearFluid);
 document.querySelector("#reset-controls").addEventListener("click", () => {
   Object.assign(ASCII_CONFIG, structuredClone(DEFAULT_ASCII_CONFIG));
+  resetSafeAreaPreview();
   applyVisualConfig();
   markSafeAreaDirty();
   runtime.layout = null;

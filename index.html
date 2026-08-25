@@ -9,7 +9,7 @@
       content="MINIMAX CODE interactive ASCII field — a Canvas 2D CPU-fluid study of the Codex hero interaction."
     />
     <title>MINIMAX CODE · ASCII Field</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260825-2" />
   </head>
   <body>
     <main id="ascii-field" aria-label="MINIMAX CODE 交互式 ASCII 字符场">
@@ -18,6 +18,27 @@
         aria-hidden="true"
         data-ascii-overlay-state="loading"
       ></canvas>
+      <section
+        id="safe-area-preview"
+        class="safe-area-preview"
+        data-ascii-overlay-content
+        aria-label="内容避让预览"
+      >
+        <div class="safe-area-preview__copy">
+          <p id="safe-area-preview-text" class="safe-area-preview__text">
+            正文会避开 ASCII 字符
+          </p>
+          <button id="safe-area-preview-button" class="safe-area-preview__button" type="button">
+            预览按钮
+          </button>
+        </div>
+        <img
+          id="safe-area-preview-image"
+          class="safe-area-preview__image"
+          alt="上传的内容避让预览图片"
+          hidden
+        />
+      </section>
     </main>
     <button
       id="controls-toggle"
@@ -48,9 +69,9 @@
         <button id="clear-field" type="button">清空轨迹</button>
         <button id="copy-config" type="button">复制 JSON</button>
         <button id="capture-png" type="button">截图 PNG</button>
-        <button id="reset-controls" class="button-primary" type="button">恢复 Codex 基线</button>
+        <button id="reset-controls" class="button-primary" type="button">恢复默认</button>
       </footer>
     </aside>
-    <script type="module" src="./ascii-hero.js"></script>
+    <script type="module" src="./ascii-hero.js?v=20260825-2"></script>
   </body>
 </html>
