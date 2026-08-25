@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#68c0ff" />
+    <meta
+      name="description"
+      content="MINIMAX CODE interactive ASCII field — a Canvas 2D CPU-fluid study of the Codex hero interaction."
+    />
+    <title>MINIMAX CODE · ASCII Field</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="ascii-field" aria-label="MINIMAX CODE 交互式 ASCII 字符场">
+      <canvas
+        id="ascii-canvas"
+        aria-hidden="true"
+        data-ascii-overlay-state="loading"
+      ></canvas>
+    </main>
+    <button
+      id="controls-toggle"
+      class="floating-button"
+      type="button"
+      data-controls-ui
+      aria-controls="control-panel"
+    >
+      调整效果
+    </button>
+    <aside
+      id="control-panel"
+      data-controls-ui
+      aria-label="ASCII 效果参数"
+      aria-hidden="false"
+    >
+      <header class="panel-header">
+        <div>
+          <h1>ASCII 效果参数</h1>
+          <p>滑动后立即生效</p>
+        </div>
+        <button id="controls-close" class="icon-button" type="button" aria-label="收起参数面板">
+          ×
+        </button>
+      </header>
+      <form id="controls-form" aria-label="效果参数"></form>
+      <footer class="panel-footer">
+        <button id="clear-field" type="button">清空轨迹</button>
+        <button id="copy-config" type="button">复制 JSON</button>
+        <button id="reset-controls" class="button-primary" type="button">恢复 Codex 基线</button>
+      </footer>
+    </aside>
+    <script type="module" src="./ascii-hero.js"></script>
+  </body>
+</html>
